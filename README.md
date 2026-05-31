@@ -147,4 +147,3 @@ job_scraper_v2/
 - Store in **PostgreSQL** for multi-user use
 - Build a **Flask dashboard** to browse the DB
 - Add **Telegram bot** notifications
-- Filter by **salary range** or **experience level**
