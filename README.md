@@ -42,7 +42,38 @@ python scraper.py \
   --email yourname@gmail.com \
   --from-email yourname@gmail.com \
   --password "xxxx xxxx xxxx xxxx"
+
+# Filter by experience
+python scraper.py --keyword "backend developer" --min-exp 1 --max-exp 4
+
+# Filter by salary (in LPA)
+python scraper.py --keyword "dotnet" --min-salary 8 --max-salary 20
+
+# Combined filters
+python scraper.py --keyword "C# developer" --min-exp 1 --max-exp 4 --min-salary 8 --max-salary 20
+
+# One-sided filters
+python scraper.py --keyword "backend" --min-salary 15       # 15 LPA and above
+python scraper.py --keyword "backend" --max-exp 2           # freshers/juniors only
 ```
+
+---
+
+## 🔽 Filters
+
+| Flag | Type | Description |
+|---|---|---|
+| `--min-exp` | float | Minimum experience in years (e.g. `1`) |
+| `--max-exp` | float | Maximum experience in years (e.g. `4`) |
+| `--min-salary` | float | Minimum salary in LPA (e.g. `8`) |
+| `--max-salary` | float | Maximum salary in LPA (e.g. `20`) |
+
+**How filtering works:**
+- Parses experience strings like `"2-4 yrs"`, `"3+ years"` automatically
+- Parses salary strings like `"₹8-12 LPA"`, `"INR 10-15 LPA"` automatically  
+- Uses **overlap logic** — a `₹8-12 LPA` job passes `--min-salary 10` since ranges overlap
+- Jobs with unparseable salary/experience are **kept by default** so you don't miss good listings
+- If no jobs match, you'll see: `⚠️ No jobs matched your filters. Try widening the range.`
 
 ---
 
