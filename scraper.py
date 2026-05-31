@@ -6,8 +6,9 @@ deduplicates via SQLite, and sends a daily email digest.
 
 Usage:
     python scraper.py --keyword "backend developer" --location "Delhi"
-    python scraper.py --keyword "dotnet" --email you@gmail.com
-    python scraper.py --keyword "python" --location "Bangalore" --email you@gmail.com --limit 20
+    python scraper.py --keyword "dotnet" --min-exp 1 --max-exp 4
+    python scraper.py --keyword "python" --min-salary 10 --max-salary 25
+    python scraper.py --keyword "C#" --min-exp 2 --max-exp 5 --min-salary 8 --max-salary 20 --email you@gmail.com
 """
 
 import argparse
@@ -97,6 +98,100 @@ def make_id(title: str, company: str, source: str) -> str:
     """Stable unique ID from job title + company + source."""
     raw = f"{title.lower().strip()}{company.lower().strip()}{source}"
     return hashlib.md5(raw.encode()).hexdigest()
+
+
+# ─── Filters ─────────────────────────────────────────────────────────────────
+
+def _extract_exp_years(exp_str: str) -> tuple[float, float] | None:
+    """
+    Parses experience strings like '2-4 yrs', '3+ years', '0-2 Yrs', '5 years'
+    Returns (min_years, max_years) or None if unparseable.
+    """
+    exp_str = exp_str.lower().strip()
+    # Range: "2-4 yrs", "1 - 3 years"
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*[-–to]+\s*(\d+(?:\.\d+)?)", exp_str)
+    if range_match:
+        return float(range_match.group(1)), float(range_match.group(2))
+    # Single with +: "3+ years"
+    plus_match = re.search(r"(\d+(?:\.\d+)?)\s*\+", exp_str)
+    if plus_match:
+        val = float(plus_match.group(1))
+        return val, val + 10   # treat "3+" as 3–13
+    # Single value: "5 years"
+    single_match = re.search(r"(\d+(?:\.\d+)?)", exp_str)
+    if single_match:
+        val = float(single_match.group(1))
+        return val, val
+    return None
+
+
+def _extract_salary_lpa(sal_str: str) -> tuple[float, float] | None:
+    """
+    Parses salary strings like '₹8-12 LPA', 'INR 10–15 LPA', '₹20 LPA', 'Not listed'.
+    Returns (min_lpa, max_lpa) or None if unparseable.
+    """
+    sal_str = sal_str.lower().replace(",", "")
+    # Range: "8-12 lpa", "10–15 lpa"
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)", sal_str)
+    if range_match:
+        return float(range_match.group(1)), float(range_match.group(2))
+    # Single: "20 lpa"
+    single_match = re.search(r"(\d+(?:\.\d+)?)", sal_str)
+    if single_match:
+        val = float(single_match.group(1))
+        return val, val
+    return None
+
+
+def apply_filters(
+    jobs: list[dict],
+    min_exp: float | None,
+    max_exp: float | None,
+    min_salary: float | None,
+    max_salary: float | None,
+) -> list[dict]:
+    """
+    Filters jobs by experience (years) and salary (LPA).
+    Jobs with unparseable values are KEPT by default (benefit of the doubt).
+    """
+    if not any([min_exp, max_exp, min_salary, max_salary]):
+        return jobs  # no filters applied
+
+    filtered = []
+    removed  = 0
+
+    for job in jobs:
+        # ── Experience filter ──
+        if min_exp is not None or max_exp is not None:
+            parsed_exp = _extract_exp_years(job.get("experience", ""))
+            if parsed_exp:
+                job_min_exp, job_max_exp = parsed_exp
+                # Reject if job's range is entirely outside desired range
+                if max_exp is not None and job_min_exp > max_exp:
+                    removed += 1
+                    continue
+                if min_exp is not None and job_max_exp < min_exp:
+                    removed += 1
+                    continue
+
+        # ── Salary filter ──
+        if min_salary is not None or max_salary is not None:
+            parsed_sal = _extract_salary_lpa(job.get("salary", ""))
+            if parsed_sal:
+                job_min_sal, job_max_sal = parsed_sal
+                if max_salary is not None and job_min_sal > max_salary:
+                    removed += 1
+                    continue
+                if min_salary is not None and job_max_sal < min_salary:
+                    removed += 1
+                    continue
+
+        filtered.append(job)
+
+    if removed:
+        print(f"  🔽 Filters removed {removed} jobs — {len(filtered)} remaining")
+
+    return filtered
 
 
 # ─── Naukri Scraper ──────────────────────────────────────────────────────────
@@ -414,21 +509,33 @@ def display(jobs: list[dict]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Scrape Indian job boards and get email digests.")
-    parser.add_argument("--keyword",   default="backend developer", help="Job keyword")
-    parser.add_argument("--location",  default="Delhi",             help="Job location (city)")
-    parser.add_argument("--limit",     type=int, default=10,        help="Max results per site")
-    parser.add_argument("--email",     default="",                  help="Send digest to this email")
-    parser.add_argument("--from-email",default="",                  help="Your Gmail address")
-    parser.add_argument("--password",  default="",                  help="Gmail App Password")
-    parser.add_argument("--no-mock",   action="store_true",         help="Disable mock fallback")
+    parser.add_argument("--keyword",    default="backend developer", help="Job keyword")
+    parser.add_argument("--location",   default="Delhi",             help="Job location (city)")
+    parser.add_argument("--limit",      type=int, default=10,        help="Max results per site")
+    parser.add_argument("--min-exp",    type=float, default=None,    help="Minimum experience in years (e.g. 1)")
+    parser.add_argument("--max-exp",    type=float, default=None,    help="Maximum experience in years (e.g. 4)")
+    parser.add_argument("--min-salary", type=float, default=None,    help="Minimum salary in LPA (e.g. 8)")
+    parser.add_argument("--max-salary", type=float, default=None,    help="Maximum salary in LPA (e.g. 20)")
+    parser.add_argument("--email",      default="",                  help="Send digest to this email")
+    parser.add_argument("--from-email", default="",                  help="Your Gmail address")
+    parser.add_argument("--password",   default="",                  help="Gmail App Password")
+    parser.add_argument("--no-mock",    action="store_true",         help="Disable mock fallback")
     args = parser.parse_args()
 
     print("=" * 80)
     print("         🕷️  Job Scraper v2 — Naukri + LinkedIn India")
     print("=" * 80)
-    print(f"  Keyword : {args.keyword}")
-    print(f"  Location: {args.location}")
-    print(f"  Limit   : {args.limit} per site")
+    print(f"  Keyword    : {args.keyword}")
+    print(f"  Location   : {args.location}")
+    print(f"  Limit      : {args.limit} per site")
+    if args.min_exp is not None or args.max_exp is not None:
+        lo = f"{args.min_exp:.0f}" if args.min_exp is not None else "any"
+        hi = f"{args.max_exp:.0f}" if args.max_exp is not None else "any"
+        print(f"  Experience : {lo} – {hi} years")
+    if args.min_salary is not None or args.max_salary is not None:
+        lo = f"₹{args.min_salary:.0f} LPA" if args.min_salary is not None else "any"
+        hi = f"₹{args.max_salary:.0f} LPA" if args.max_salary is not None else "any"
+        print(f"  Salary     : {lo} – {hi}")
 
     conn = sqlite3.connect(DB_FILE)
     init_db(conn)
@@ -454,6 +561,20 @@ def main():
         print("\n  ⚠️  Live scraping returned 0 results (sites may block bots).")
         print("  ✅ Using realistic mock data for demo purposes.\n")
         all_jobs = _mock_jobs(args.keyword, args.location)
+
+    # Apply filters
+    print("\n🔽 Applying filters...")
+    all_jobs = apply_filters(
+        jobs=all_jobs,
+        min_exp=args.min_exp,
+        max_exp=args.max_exp,
+        min_salary=args.min_salary,
+        max_salary=args.max_salary,
+    )
+    if not all_jobs:
+        print("  ⚠️  No jobs matched your filters. Try widening the range.")
+        conn.close()
+        return
 
     # Save to DB
     inserted, skipped = save_jobs(conn, all_jobs)
